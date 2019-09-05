@@ -1,0 +1,184 @@
+---
+title: "Unconstrained SIMs/Individual SCs"
+output: html_notebook
+---
+
+```{r}
+# Load required libraries and files
+library(spatstat)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(rgdal)
+library(spdep)
+library(tidyverse)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(sp)
+library(reshape2)
+library(stplanr)
+
+# Read in the Westminster OA shapefile as SP object
+West <- readOGR("Westminster OA Full Data_shapefile.shp")
+
+# Read the sportcentres shapefile that has locations
+sportcentres <- readOGR("Sportcentres_locations.shp")
+
+# Import the spatial interaction data that was prepared and transformed in Python
+mdata <- read_csv("Spatial Interaction Data_v2.csv",col_names = TRUE)
+
+# Create functions to calculate r2 and RMSE
+CalcRSquared <- function(observed,estimated){
+  r <- cor(observed,estimated)
+  R2 <- r^2
+  R2
+}
+
+CalcRMSE <- function(observed,estimated){
+  res <- (observed - estimated)^2
+  RMSE <- round(sqrt(mean(res)),3)
+  RMSE
+}
+
+
+# Subset main dataframe by individual SC.
+mdata_porch <- subset(mdata, SportsCentre == "Porchester Hall")
+mdata_marsh <- subset(mdata, SportsCentre == "Marshall Street LC")
+mdata_pad <- subset(mdata, SportsCentre == "Paddington Rec Ground")
+mdata_jub <- subset(mdata, SportsCentre == "Jubilee SC")
+mdata_lv <- subset(mdata, SportsCentre == "Little Venice SC")
+mdata_mob <- subset(mdata, SportsCentre == "Moberly SC")
+mdata_qm <- subset(mdata, SportsCentre == "Queen Mother SC")
+mdata_sey <- subset(mdata, SportsCentre == "Seymour LC")
+
+# due to collinearity of OA or SC codes, unconstrained model required
+prodSim_porch <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_porch)
+
+prodSim_marsh <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_marsh)
+
+prodSim_pad <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_pad)
+
+prodSim_jub<- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_jub)
+
+prodSim_lv <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_lv)
+
+prodSim_mob <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_mob)
+
+prodSim_qm <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_qm)
+
+prodSim_sey <- glm(Users ~ AcCategory + log(Distance), na.action = na.exclude, family = poisson(link = "log"), data = mdata_sey)
+
+
+# look at summaries
+print(summary(prodSim_porch))
+print(summary(prodSim_marsh))
+print(summary(prodSim_pad))
+print(summary(prodSim_jub))
+print(summary(prodSim_lv))
+print(summary(prodSim_mob))
+print(summary(prodSim_qm))
+print(summary(prodSim_sey))
+```
+
+```{r}
+# Save summary results as a text file
+#sink('Sc distance-results.txt')
+#print(c(summary(prodSim_porch),summary(prodSim_marsh),summary(prodSim_pad),summary(prodSim_jub), summary(prodSim_lv),summary(prodSim_mob),summary(prodSim_qm),summary(prodSim_sey)))
+#sink()
+
+# Pull coefficients out of the prodsim glm object
+SCcoefs <- as.data.frame(prodSim_porch$coefficients)
+SCcoefs['porch_coef'] <- as.data.frame(prodSim_porch$coefficients)
+SCcoefs['marsh_coef'] <- as.data.frame(prodSim_marsh$coefficients)
+SCcoefs['pad_coef'] <- as.data.frame(prodSim_pad$coefficients)
+SCcoefs['jub_coef'] <- as.data.frame(prodSim_jub$coefficients)
+SCcoefs['lv_coef'] <- as.data.frame(prodSim_lv$coefficients)
+SCcoefs['mob_coef'] <- as.data.frame(prodSim_mob$coefficients)
+SCcoefs['qm_coef'] <- as.data.frame(prodSim_qm$coefficients)
+SCcoefs['sey_coef'] <- as.data.frame(prodSim_sey$coefficients)
+
+
+# Transpose data into more helpful format
+SCcoefs = t(SCcoefs) 
+
+
+# Asess the goodness of fit of each
+#Use the fitted parameters to generate estimates and round the estimates
+mdata_porch$prodsimFitted_porch <- round(fitted(prodSim_porch),0)
+mdata_marsh$prodsimFitted_marsh <- round(fitted(prodSim_marsh),0)
+mdata_pad$prodsimFitted_pad <- round(fitted(prodSim_pad),0)
+mdata_jub$prodsimFitted_jub <- round(fitted(prodSim_jub),0)
+mdata_lv$prodsimFitted_lv <- round(fitted(prodSim_lv),0)
+mdata_mob$prodsimFitted_mob <- round(fitted(prodSim_mob),0)
+mdata_qm$prodsimFitted_qm <- round(fitted(prodSim_qm),0)
+mdata_sey$prodsimFitted_sey <- round(fitted(prodSim_sey),0)
+
+# Create matricies of all predictions
+mdatasubmat_porch <- dcast(mdata_porch, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_porch", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_marsh <- dcast(mdata_marsh, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_marsh", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_pad <- dcast(mdata_pad, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_pad", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_jub <- dcast(mdata_jub, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_jub", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_lv <- dcast(mdata_lv, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_lv", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_mob <- dcast(mdata_mob, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_mob", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_qm <- dcast(mdata_qm, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_qm", margins=c("OA11CD", "SportsCentre"))
+
+mdatasubmat_sey <- dcast(mdata_sey, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_sey", margins=c("OA11CD", "SportsCentre"))
+
+#vcalculate r2 and RMSE and print them out
+print(paste("Porchester r2:", CalcRSquared(mdata_porch$Users,mdata_porch$prodsimFitted_porch)))
+print(paste("Porchester RMSE:",CalcRMSE(mdata_porch$Users,mdata_porch$prodsimFitted_porch)))
+
+print(paste("Marshall r2:", CalcRSquared(mdata_marsh$Users,mdata_marsh$prodsimFitted_marsh)))
+print(paste("Marshall RMSE:",CalcRMSE(mdata_marsh$Users,mdata_marsh$prodsimFitted_marsh)))
+
+print(paste("Pad r2:", CalcRSquared(mdata_pad$Users,mdata_pad$prodsimFitted_pad)))
+print(paste("Pad RMSE:",CalcRMSE(mdata_pad$Users,mdata_pad$prodsimFitted_pad)))
+
+print(paste("jub r2:", CalcRSquared(mdata_jub$Users,mdata_jub$prodsimFitted_jub)))
+print(paste("jub RMSE:",CalcRMSE(mdata_jub$Users,mdata_jub$prodsimFitted_jub)))
+
+print(paste("little venice r2:", CalcRSquared(mdata_lv$Users,mdata_lv$prodsimFitted_lv)))
+print(paste("little venice RMSE:",CalcRMSE(mdata_lv$Users,mdata_lv$prodsimFitted_lv)))
+
+print(paste("mob r2:", CalcRSquared(mdata_mob$Users,mdata_mob$prodsimFitted_mob)))
+print(paste("mob RMSE:",CalcRMSE(mdata_mob$Users,mdata_mob$prodsimFitted_mob)))
+
+print(paste("qm r2:", CalcRSquared(mdata_qm$Users,mdata_qm$prodsimFitted_qm)))
+print(paste("qm RMSE:",CalcRMSE(mdata_qm$Users,mdata_qm$prodsimFitted_qm)))
+
+print(paste("sey r2:", CalcRSquared(mdata_sey$Users,mdata_sey$prodsimFitted_sey)))
+print(paste("sey RMSE:",CalcRMSE(mdata_sey$Users,mdata_sey$prodsimFitted_sey)))
+
+# Write the coefficients to a CSV for future use
+#write.csv(SCcoefs, "SIM_SportsCentre_Coefficients.csv")
+```
+```{r}
+# Put the coefficient values into a dataframe for each model, and send them to CSV.
+# Z-scores for categories show us which groups have largest influence on each SC model
+porch_Cat_Coefs <- as.data.frame(summary(prodSim_porch)$coefficients)
+marsh_Cat_Coefs <- as.data.frame(summary(prodSim_marsh)$coefficients)
+pad_Cat_Coefs <- as.data.frame(summary(prodSim_pad)$coefficients)
+jub_Cat_Coefs <- as.data.frame(summary(prodSim_jub)$coefficients)
+lv_Cat_Coefs <- as.data.frame(summary(prodSim_lv)$coefficients)
+mob_Cat_Coefs <- as.data.frame(summary(prodSim_mob)$coefficients)
+qm_Cat_Coefs <- as.data.frame(summary(prodSim_qm)$coefficients)
+sey_Cat_Coefs <- as.data.frame(summary(prodSim_sey)$coefficients)
+
+# Print to CSV for future use
+#write.csv(porch_Cat_Coefs, "porch_SportsCentre_Coefficients.csv")
+#write.csv(marsh_Cat_Coefs, "marsh_SportsCentre_Coefficients.csv")
+#write.csv(pad_Cat_Coefs, "pad_SportsCentre_Coefficients.csv")
+#write.csv(jub_Cat_Coefs, "jub_SportsCentre_Coefficients.csv")
+#write.csv(lv_Cat_Coefs, "lv_SportsCentre_Coefficients.csv")
+#write.csv(mob_Cat_Coefs, "mob_SportsCentre_Coefficients.csv")
+#write.csv(qm_Cat_Coefs, "qm_SportsCentre_Coefficients.csv")
+#write.csv(sey_Cat_Coefs, "sey_SportsCentre_Coefficients.csv")
+```
+

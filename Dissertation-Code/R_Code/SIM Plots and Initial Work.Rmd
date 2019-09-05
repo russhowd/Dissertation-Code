@@ -1,0 +1,174 @@
+---
+title: "SIM plots and initial work"
+output: html_notebook
+---
+
+```{r}
+# Load required libraries and files
+library(spatstat)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(rgdal)
+library(spdep)
+library(tidyverse)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(sp)
+library(reshape2)
+library(stplanr)
+
+# Read in the Westminster OA shapefile as SP object
+West <- readOGR("Westminster OA Full Data_shapefile.shp")
+
+# Read the sportcentres shapefile that has locations
+sportcentres <- readOGR("Sportcentres_locations.shp")
+
+# Import the spatial interaction data that was prepared and transformed in Python
+mdata <- read_csv("Spatial Interaction Data_v2.csv",col_names = TRUE)
+
+# Create functions to calculate r2 and RMSE
+CalcRSquared <- function(observed,estimated){
+  r <- cor(observed,estimated)
+  R2 <- r^2
+  R2
+}
+
+CalcRMSE <- function(observed,estimated){
+  res <- (observed - estimated)^2
+  RMSE <- round(sqrt(mean(res)),3)
+  RMSE
+}
+
+#First plot the flows against distance
+qplot(mdata$Distance, mdata$Users, main="Users by Distance", ylab="User Flow", xlab="Distance (metres)")+ geom_smooth(method = lm)+
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+```{r}
+# Show that our flow distribution is actually Poisson, not Normal.
+
+qplot(mdata$Users, main = "Sport Centre User Distribution", ylab="Frequency", xlab="User Flow")+ geom_histogram(col='white', fill='black')+ 
+  geom_vline(xintercept=mean(mdata$Users),colour="red",	size=1, linetype = "longdash") + 
+  annotate("text",	x=95,	y=3085,	label="Mean: 15.18 users", col='red', size = 4)+
+    theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+```{r}
+# Log the data from above to show that Poisson is actually a better fit.
+
+qplot(log(Distance), log(Users), data=mdata, main = "Users by Distance (Logged)", ylab='Logged User Flow', xlab = 'Logged Distance (metres)') + geom_smooth(method = lm) +
+   theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Attempt a production-constrained model
+
+# Uses the OA code and distance as the parameters
+prodSim <- glm(Users ~ OA11CD + log(Distance)-1, na.action = na.exclude, family = poisson(link = "log"), data = mdata)
+
+# Look at the summary
+options(max.print=1000000)
+summary(prodSim)
+```
+```{r}
+#create some Oi and Dj columns in the dataframe and store row and column totals in them:
+
+#to create O_i, take mdata ...then... group by OA11CD ...then... summarise by calculating the sum of Total
+O_i <- mdata %>% group_by(OA11CD) %>% summarise(O_i = sum(Users))
+mdata$O_i <- O_i$O_i[match(mdata$OA11CD,O_i$OA11CD)]
+
+D_j <- mdata %>% group_by(SportsCentre) %>% summarise(D_j = sum(Users))
+mdata$D_j <- D_j$D_j[match(mdata$SportsCentre,D_j$SportsCentre)]
+
+# Pull out the coefficients and put them into an object
+coefs <- as.data.frame(prodSim$coefficients)
+
+# Put coefficients back into our dataframe. Code adapted from Dr. Adam Dennett's solution
+mdata$mu_i <- coefs$`prodSim$coefficients`[match(mdata$OA11CD,sub(".*OA11CD","", rownames(coefs)))]
+
+# Use the fitted paramaters to generate estimates
+mdata$prodsimFitted <- fitted(prodSim)
+
+# Asess the goodness of fit
+# Round the estimates (no "partial" users)
+mdata$prodsimFitted <- round(fitted(prodSim),0)
+
+# Create matrix of predictions
+mdatasubmat3 <- dcast(mdata, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted", margins=c("OA11CD", "SportsCentre"))
+
+# Calculate r2 and RMSE
+CalcRSquared(mdata$Users,mdata$prodsimFitted)
+CalcRMSE(mdata$Users,mdata$prodsimFitted)
+```
+```{r}
+# Calculate a basic attraction-constrained model
+# Conduct attraction/destination-constrained model. Nearly same as production-constrained, except use the destination (SportsCentre) rather than the origin (OA) as the constraint
+
+attrSim <- glm(Users ~ SportsCentre+ log(Distance)-1, na.action = na.exclude, family = poisson(link = "log"), data = mdata)
+
+# Get summar stats
+options(max.print=1000000)
+summary(attrSim)
+```
+```{r}
+# Use the fitted paramaters to generate estimates and round them
+mdata$attrsimFitted <- round(fitted(attrSim),0)
+
+# Create matrix of predictions
+mdatasubmat4 <- dcast(mdata, OA11CD ~ SportsCentre, sum, value.var = "attrsimFitted", margins=c("OA11CD", "SportsCentre"))
+
+# Calculate goodness-of-fit: R2 and RMSE
+CalcRSquared(mdata$Users,mdata$attrsimFitted)
+CalcRMSE(mdata$Users,mdata$attrsimFitted)
+```
+```{r}
+# Test different distance decay parameters on our double-constrained SIM
+
+# Standard model used an inverse power relationship. 
+# This tests the negative exponential function, but not logging the distance measure.
+
+doubSim_exp <- glm(Users ~ OA11CD+SportsCentre+Distance, na.action = na.exclude, family = poisson(link = "log"), data = mdata)
+
+
+#let's have a look at it's summary...
+options(max.print=100)
+summary(doubSim_exp)
+```
+
+```{r}
+# make estimates and round them
+mdata$doubsimFitted_exp <- round(fitted(doubSim_exp),0)
+
+# create matrix of predictions
+mdatasubmat6 <- dcast(mdata, OA11CD ~ SportsCentre, sum, value.var = "doubsimFitted_exp", margins=c("OA11CD", "SportsCentre"))
+
+# calculate some goodness-of-fit statistics
+CalcRSquared(mdata$Users,mdata$doubsimFitted_exp)
+CalcRMSE(mdata$Users,mdata$doubsimFitted_exp)
+```
+```{r}
+# Next test, use the production-constrained SIM (stronger than the attraction-constrained) by including an Sport Centre attraction proxy. In this case, use the D_j measure which is the total number of people that visit each Sport Centre. 
+
+# Constrained by OA, but include the SC attractiveness (D_j) as a variable
+prodSim_dj <- glm(Users ~ OA11CD + D_j +log(Distance)-1, na.action = na.exclude, family = poisson(link = "log"), data = mdata)
+
+#let's have a look at it's summary...
+options(max.print=100)
+summary(prodSim_dj)
+```
+```{r}
+# make estimates and round them
+mdata$prodsimFitted_dj <- round(fitted(prodSim_dj),0)
+
+# Create matrix of predictions
+mdatasubmat7 <- dcast(mdata, OA11CD ~ SportsCentre, sum, value.var = "prodsimFitted_dj", margins=c("OA11CD", "SportsCentre"))
+
+# calculate some goodness-of-fit statistics
+CalcRSquared(mdata$Users,mdata$prodsimFitted_dj)
+CalcRMSE(mdata$Users,mdata$prodsimFitted_dj)
+```
+
